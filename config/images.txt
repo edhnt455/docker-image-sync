@@ -6,4 +6,4 @@
 # ghcr.io/some-org/some-app|some-app|latest,v1.0.0
 # ghcr.io/another-org/demo|demo-mirror|latest
 
-ghcr.io/usagi-org/ai-goofish|ai-goofish|latest
+ghcr.io/usagi-org/ai-goofish|edhnt4551|latest
