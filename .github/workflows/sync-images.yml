@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -26,10 +29,10 @@ jobs:
           skopeo login docker.io -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Login to GHCR (optional)
-        if: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_TOKEN != '' }}
+        if: ${{ env.GHCR_USERNAME != '' && env.GHCR_TOKEN != '' }}
         run: |
-          echo "${{ secrets.GHCR_TOKEN }}" | \
-          skopeo login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+          echo "${{ env.GHCR_TOKEN }}" | \
+          skopeo login ghcr.io -u "${{ env.GHCR_USERNAME }}" --password-stdin
 
       - name: Run sync script
         env:
