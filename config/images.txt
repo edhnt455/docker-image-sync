@@ -7,3 +7,4 @@
 # ghcr.io/another-org/demo|demo-mirror|latest
 
 ghcr.io/usagi-org/ai-goofish|ai-goofish|latest
+ghcr.io/fish2018/pansou-web|pansou-web|latest
