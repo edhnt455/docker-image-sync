@@ -6,17 +6,14 @@ on:
     - cron: "0 0 * * *"  # 每天 UTC 00:00（北京时间 08:00）执行一次
 
 jobs:
-  keepalive:
-    name: Keep scheduled workflow active
+  keepalive-workflow:
+    name: Keepalive Workflow
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Keep workflow alive
-        uses: gautamkrishnar/keepalive-workflow@v2
+      - uses: liskin/gh-workflow-keepalive@v1
 
   sync:
     runs-on: ubuntu-latest
