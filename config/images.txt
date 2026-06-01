@@ -8,4 +8,4 @@
 
 ghcr.io/usagi-org/ai-goofish|ai-goofish|latest
 ghcr.io/fish2018/pansou-web|pansou-web|latest
-ghcr.io/memorial-coder/taoyuan-duli|taoyuan-duli|latest
+ghcr.io/engigu/baihu|baihu-panel|latest
