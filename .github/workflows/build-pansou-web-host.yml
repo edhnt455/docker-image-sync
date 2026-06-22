@@ -1,0 +1,172 @@
+name: Build PanSou Web Host image
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"  # 每天 UTC 01:00 执行，用于跟随上游 latest 更新
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-pansou-web-host
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: pansou-web
+      BASE_IMAGE: ghcr.io/fish2018/pansou-web:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare PanSou Web host build context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          rm -rf build-context
+          mkdir -p build-context
+
+          base_digest="$(docker buildx imagetools inspect "${BASE_IMAGE}" --format '{{.Digest}}' 2>/dev/null || true)"
+          if [ -z "${base_digest}" ]; then
+              base_digest="$(docker buildx imagetools inspect "${BASE_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
+          fi
+          if [ -z "${base_digest}" ]; then
+              echo "Failed to resolve manifest digest for ${BASE_IMAGE}" >&2
+              exit 1
+          fi
+
+          BASE_IMAGE_PINNED="ghcr.io/fish2018/pansou-web@${base_digest}"
+          echo "Using pinned base image: ${BASE_IMAGE_PINNED}"
+
+          docker pull "${BASE_IMAGE_PINNED}"
+          container_id="$(docker create "${BASE_IMAGE_PINNED}")"
+          trap 'docker rm -f "${container_id}" >/dev/null 2>&1 || true' EXIT
+
+          docker cp "${container_id}:/app/start.sh" build-context/start.sh
+          chmod +x build-context/start.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('build-context/start.sh')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  'export DOMAIN=${DOMAIN:-localhost}\n',
+                  'export DOMAIN=${DOMAIN:-localhost}\n'
+                  'export NGINX_HTTP_PORT=${NGINX_HTTP_PORT:-8080}\n'
+                  'export NGINX_HTTPS_PORT=${NGINX_HTTPS_PORT:-8443}\n',
+              ),
+              (
+                  '    listen 80;',
+                  '    listen ${NGINX_HTTP_PORT};',
+              ),
+              (
+                  'echo "    listen 443 ssl http2;"',
+                  'echo "    listen ${NGINX_HTTPS_PORT} ssl http2;"',
+              ),
+              (
+                  '    echo "    return 301 https://\\$host\\$request_uri;"',
+                  '    if [ "${NGINX_HTTPS_PORT}" = "443" ]; then\n'
+                  '        echo "    return 301 https://\\$host\\$request_uri;"\n'
+                  '    else\n'
+                  '        echo "    return 301 https://\\$host:${NGINX_HTTPS_PORT}\\$request_uri;"\n'
+                  '    fi',
+              ),
+          ]
+
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Expected start.sh pattern not found: {old!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          cat > build-context/healthcheck.sh <<'EOF'
+          #!/bin/bash
+          set -Eeuo pipefail
+
+          PANSOU_HOST=${PANSOU_HOST:-127.0.0.1}
+          PANSOU_PORT=${PANSOU_PORT:-8888}
+          NGINX_HTTP_PORT=${NGINX_HTTP_PORT:-8080}
+          HEALTH_CHECK_TIMEOUT=${HEALTH_CHECK_TIMEOUT:-10}
+
+          if ! pgrep nginx >/dev/null 2>&1; then
+              echo "❌ Nginx进程不存在"
+              exit 1
+          fi
+
+          if ! curl -sf --max-time "${HEALTH_CHECK_TIMEOUT}" "http://127.0.0.1:${NGINX_HTTP_PORT}/api/health" >/dev/null 2>&1; then
+              echo "❌ Nginx无法访问健康检查端点"
+              exit 1
+          fi
+
+          if ! curl -sf --max-time "${HEALTH_CHECK_TIMEOUT}" "http://${PANSOU_HOST}:${PANSOU_PORT}/api/health" >/dev/null 2>&1; then
+              echo "❌ 后端服务健康检查失败"
+              exit 1
+          fi
+
+          exit 0
+          EOF
+          chmod +x build-context/healthcheck.sh
+
+          cat > build-context/Dockerfile <<EOF
+          FROM ${BASE_IMAGE_PINNED}
+
+          ENV NGINX_HTTP_PORT=8080
+          ENV NGINX_HTTPS_PORT=8443
+
+          COPY start.sh /app/start.sh
+          COPY healthcheck.sh /app/healthcheck.sh
+
+          RUN chmod +x /app/start.sh /app/healthcheck.sh
+
+          EXPOSE 8080 8443
+
+          HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+            CMD /app/healthcheck.sh || exit 1
+          EOF
+
+          echo "Generated build context:"
+          find build-context -maxdepth 1 -type f -print | sort
+
+          echo "Verifying generated start.sh contains custom Nginx ports and redirect behavior..."
+          grep -F 'NGINX_HTTP_PORT=${NGINX_HTTP_PORT:-8080}' build-context/start.sh
+          grep -F 'NGINX_HTTPS_PORT=${NGINX_HTTPS_PORT:-8443}' build-context/start.sh
+          grep -F 'listen ${NGINX_HTTP_PORT};' build-context/start.sh
+          grep -F 'listen ${NGINX_HTTPS_PORT} ssl http2;' build-context/start.sh
+          grep -F 'https://\$host:${NGINX_HTTPS_PORT}\$request_uri' build-context/start.sh
+          grep -F "FROM ${BASE_IMAGE_PINNED}" build-context/Dockerfile
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: build-context
+          file: build-context/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/pansou-web:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/pansou-web:host
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/pansou-web:host-${{ github.run_number }}
