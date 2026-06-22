@@ -45,16 +45,66 @@ jobs:
           rm -rf build-context
           mkdir -p build-context
 
-          base_digest="$(docker buildx imagetools inspect "${BASE_IMAGE}" --format '{{.Digest}}' 2>/dev/null || true)"
-          if [ -z "${base_digest}" ]; then
-              base_digest="$(docker buildx imagetools inspect "${BASE_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
-          fi
-          if [ -z "${base_digest}" ]; then
-              echo "Failed to resolve manifest digest for ${BASE_IMAGE}" >&2
-              exit 1
-          fi
+          BASE_IMAGE_PINNED="$(python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
 
-          BASE_IMAGE_PINNED="ghcr.io/fish2018/pansou-web@${base_digest}"
+          image = os.environ['BASE_IMAGE']
+          registry = 'ghcr.io/'
+          if not image.startswith(registry):
+              raise SystemExit(f'Unsupported BASE_IMAGE registry for digest resolution: {image}')
+
+          reference = image[len(registry):]
+          if '@' in reference:
+              repository, digest = reference.rsplit('@', 1)
+              print(f'{registry}{repository}@{digest}')
+              raise SystemExit(0)
+
+          last_path_part = reference.rsplit('/', 1)[-1]
+          if ':' in last_path_part:
+              repository, tag = reference.rsplit(':', 1)
+          else:
+              repository, tag = reference, 'latest'
+
+          token_url = (
+              'https://ghcr.io/token?service=ghcr.io&scope='
+              + urllib.parse.quote(f'repository:{repository}:pull', safe=':')
+          )
+          accept = ', '.join([
+              'application/vnd.oci.image.index.v1+json',
+              'application/vnd.docker.distribution.manifest.list.v2+json',
+              'application/vnd.oci.image.manifest.v1+json',
+              'application/vnd.docker.distribution.manifest.v2+json',
+          ])
+
+          try:
+              with urllib.request.urlopen(token_url, timeout=30) as response:
+                  token = json.load(response)['token']
+
+              request = urllib.request.Request(
+                  f'https://ghcr.io/v2/{repository}/manifests/{tag}',
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': accept,
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  digest = response.headers.get('Docker-Content-Digest')
+
+              if not digest:
+                  raise SystemExit(f'Failed to resolve manifest digest for {image}')
+
+              print(f'{registry}{repository}@{digest}')
+          except urllib.error.HTTPError as error:
+              detail = error.read().decode('utf-8', 'replace')
+              raise SystemExit(f'Failed to resolve manifest digest for {image}: HTTP {error.code} {detail}')
+          except Exception as error:
+              raise SystemExit(f'Failed to resolve manifest digest for {image}: {error}')
+          PY
+          )"
           echo "Using pinned base image: ${BASE_IMAGE_PINNED}"
 
           docker pull "${BASE_IMAGE_PINNED}"
