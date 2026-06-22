@@ -3,7 +3,7 @@ name: Build PanSou Web Host image
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *"  # 每天 UTC 01:00 执行，用于跟随上游 latest 更新
+    - cron: "0 1 5 * *"  # 每天 UTC 01:00 执行，用于跟随上游 latest 更新
 
 permissions:
   contents: read
