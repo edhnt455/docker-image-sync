@@ -10,3 +10,4 @@ ghcr.io/usagi-org/ai-goofish|ai-goofish|latest
 ghcr.io/engigu/baihu|baihu-panel|latest
 ghcr.io/willxup/cpa-usage-keeper|cpa-usage-keeper|latest
 ghcr.io/iluobei/miaomiaowu|miaomiaowu|latest
+ghcr.io/komari-monitor/komari|komari|latest
